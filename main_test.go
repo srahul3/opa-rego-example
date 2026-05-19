@@ -2,47 +2,61 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
-func TestFilterPII_TokenizesSSNAndPassesOtherFields(t *testing.T) {
-	input := map[string]interface{}{
-		"name": "Jane Doe",
-		"role": "Engineer",
-		"ssn":  "123-45-6789",
-	}
+func TestFilterPII_TokenizesEverySSNInText(t *testing.T) {
+	text := "Alice's SSN is 123-45-6789 and Bob's is 987-65-4321. " +
+		"Repeat: 123-45-6789. No SSN here."
 
-	got, err := filterPII(context.Background(), input)
+	got, err := filterPII(context.Background(), map[string]interface{}{"text": text})
 	if err != nil {
 		t.Fatalf("filterPII returned error: %v", err)
 	}
 
-	if got["name"] != "Jane Doe" {
-		t.Fatalf("expected name to pass through, got %v", got["name"])
+	found, ok := got["ssns_found"].([]interface{})
+	if !ok {
+		t.Fatalf("ssns_found not a slice: %T", got["ssns_found"])
 	}
-	if got["role"] != "Engineer" {
-		t.Fatalf("expected role to pass through, got %v", got["role"])
+	if len(found) != 3 {
+		t.Fatalf("expected 3 SSN occurrences, got %d (%v)", len(found), found)
 	}
-	if got["ssn"] != "XXX-XX-6789-[TOKEN-ID-8819]" {
-		t.Fatalf("expected tokenized ssn, got %v", got["ssn"])
+
+	tokens, ok := got["tokens"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("tokens not a map: %T", got["tokens"])
+	}
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 unique tokens, got %d (%v)", len(tokens), tokens)
+	}
+	t1, _ := tokens["123-45-6789"].(string)
+	t2, _ := tokens["987-65-4321"].(string)
+	if t1 == "" || t2 == "" {
+		t.Fatalf("missing token: %v", tokens)
+	}
+	if t1 == t2 {
+		t.Fatalf("expected distinct tokens for distinct SSNs, both = %s", t1)
+	}
+	for _, tok := range []string{t1, t2} {
+		if !strings.HasPrefix(tok, "TOKEN-ID-") || len(tok) != len("TOKEN-ID-0000") {
+			t.Fatalf("unexpected token format: %q", tok)
+		}
 	}
 }
 
 func TestFilterPII_NoSSN(t *testing.T) {
-	input := map[string]interface{}{
-		"name": "Jane Doe",
-		"role": "Engineer",
-	}
-
-	got, err := filterPII(context.Background(), input)
+	got, err := filterPII(context.Background(), map[string]interface{}{
+		"text": "Just some harmless text with no identifiers at all.",
+	})
 	if err != nil {
 		t.Fatalf("filterPII returned error: %v", err)
 	}
 
-	if _, ok := got["ssn"]; ok {
-		t.Fatalf("did not expect ssn key in output")
+	if found, ok := got["ssns_found"].([]interface{}); ok && len(found) != 0 {
+		t.Fatalf("expected no SSNs, got %v", found)
 	}
-	if got["name"] != "Jane Doe" || got["role"] != "Engineer" {
-		t.Fatalf("expected non-ssn fields to pass through, got %+v", got)
+	if tokens, ok := got["tokens"].(map[string]interface{}); ok && len(tokens) != 0 {
+		t.Fatalf("expected no tokens, got %v", tokens)
 	}
 }
